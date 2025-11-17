@@ -328,6 +328,16 @@
             </ul>
         </div>
 
+        <div class="warning-box" style="background: #e3f2fd; border-left-color: #2196F3;">
+            <h3 style="color: #1565c0;">💡 Dica para arquivos muito grandes:</h3>
+            <ul style="margin-left: 20px; color: #1565c0;">
+                <li>Para volumes muito grandes de dados, use um navegador moderno (Chrome/Edge recomendados)</li>
+                <li>Feche outras abas do navegador para liberar memória</li>
+                <li>O processamento é otimizado para usar o mínimo de memória possível</li>
+                <li>Após o download, clique em "Limpar Tudo" para liberar memória</li>
+            </ul>
+        </div>
+
         <div class="upload-section" id="uploadSection">
             <h2>📁 Selecione os arquivos</h2>
             <p style="margin: 15px 0; color: #666;">Arraste e solte os arquivos aqui ou clique no botão abaixo</p>
@@ -463,7 +473,9 @@
                         console.warn(`Arquivo ${file.name} tem ${sheetCount} abas. Processando todas...`);
                     }
 
-                    workbook.SheetNames.forEach(sheetName => {
+                    // Processar abas com pausas para evitar sobrecarga
+                    for (let sheetIdx = 0; sheetIdx < workbook.SheetNames.length; sheetIdx++) {
+                        const sheetName = workbook.SheetNames[sheetIdx];
                         const worksheet = workbook.Sheets[sheetName];
                         const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
 
@@ -474,7 +486,12 @@
                                 data: jsonData
                             });
                         }
-                    });
+
+                        // Pequena pausa a cada 10 abas
+                        if (sheetIdx > 0 && sheetIdx % 10 === 0) {
+                            await sleep(5);
+                        }
+                    }
 
                     allSheetsData.push(...fileSheets);
                     totalSheets += fileSheets.length;
@@ -546,8 +563,8 @@
 
             await sleep(50);
 
-            // Fase 1: Coletar colunas (10%)
-            progressText.textContent = 'Fase 1/3: Coletando colunas únicas...';
+            // Fase 1: Coletar colunas únicas (0% - 20%)
+            progressText.textContent = 'Fase 1/2: Coletando colunas únicas...';
             const allColumns = new Set();
 
             for (let i = 0; i < allSheetsData.length; i++) {
@@ -561,82 +578,90 @@
                 }
 
                 if (i % 10 === 0) {
-                    const progress = ((i / allSheetsData.length) * 10).toFixed(1);
+                    const progress = ((i / allSheetsData.length) * 20).toFixed(1);
                     progressFill.style.width = `${progress}%`;
                     progressFill.textContent = `${progress}%`;
-                    progressDetails.textContent = `Processando aba ${i + 1} de ${allSheetsData.length}`;
+                    progressDetails.textContent = `Analisando aba ${i + 1} de ${allSheetsData.length}`;
                     await sleep(1);
                 }
             }
 
-            progressFill.style.width = '10%';
-            progressFill.textContent = '10%';
+            // Criar array de colunas finais
+            const finalColumns = ['_source_file', '_source_sheet', ...Array.from(allColumns).sort()];
+
+            progressFill.style.width = '20%';
+            progressFill.textContent = '20%';
             progressDetails.textContent = `${allColumns.size} colunas únicas encontradas`;
             await sleep(100);
 
-            // Fase 2: Processar dados (10% - 70%)
-            progressText.textContent = 'Fase 2/3: Mesclando dados das planilhas...';
-            const processedData = [];
+            // Fase 2: Mesclar dados diretamente para array final (20% - 100%)
+            progressText.textContent = 'Fase 2/2: Mesclando dados das planilhas...';
+            const mergedArray = [finalColumns];
 
-            for (let i = 0; i < allSheetsData.length; i++) {
-                const sheet = allSheetsData[i];
+            let totalRowsProcessed = 0;
+            const updateInterval = Math.max(1, Math.floor(allSheetsData.length / 40)); // Atualizar a cada 2%
+
+            for (let sheetIndex = 0; sheetIndex < allSheetsData.length; sheetIndex++) {
+                const sheet = allSheetsData[sheetIndex];
                 const [headers, ...rows] = sheet.data;
 
                 if (!headers || headers.length === 0) continue;
 
-                // Converter linhas em objetos
-                rows.forEach(row => {
-                    const rowObj = {
-                        _source_file: sheet.fileName,
-                        _source_sheet: sheet.sheetName
-                    };
-
-                    headers.forEach((header, index) => {
-                        if (header) {
-                            const key = header.toString().trim();
-                            rowObj[key] = row[index] !== undefined ? row[index] : '';
-                        }
-                    });
-
-                    processedData.push(rowObj);
+                // Criar mapa de índices de colunas para otimizar busca
+                const columnIndexMap = new Map();
+                headers.forEach((header, index) => {
+                    if (header) {
+                        const key = header.toString().trim();
+                        columnIndexMap.set(key, index);
+                    }
                 });
 
-                // Atualizar progresso a cada 5% do processamento
-                if (i % Math.max(1, Math.floor(allSheetsData.length / 12)) === 0) {
-                    const progress = (10 + ((i / allSheetsData.length) * 60)).toFixed(1);
+                // Criar índice de colunas finais
+                const finalColumnIndices = finalColumns.map(col => {
+                    if (col === '_source_file') return -1;
+                    if (col === '_source_sheet') return -2;
+                    return columnIndexMap.has(col) ? columnIndexMap.get(col) : null;
+                });
+
+                // Processar linhas em lotes menores
+                const batchSize = 500;
+                for (let i = 0; i < rows.length; i += batchSize) {
+                    const batch = rows.slice(i, Math.min(i + batchSize, rows.length));
+
+                    batch.forEach(sourceRow => {
+                        // Criar linha mesclada diretamente
+                        const mergedRow = finalColumnIndices.map((colIndex, idx) => {
+                            if (colIndex === -1) return sheet.fileName;
+                            if (colIndex === -2) return sheet.sheetName;
+                            if (colIndex === null) return '';
+                            return sourceRow[colIndex] !== undefined ? sourceRow[colIndex] : '';
+                        });
+
+                        mergedArray.push(mergedRow);
+                    });
+
+                    totalRowsProcessed += batch.length;
+
+                    // Pequena pausa para garbage collection
+                    if (i % (batchSize * 4) === 0) {
+                        await sleep(1);
+                    }
+                }
+
+                // Atualizar progresso
+                if (sheetIndex % updateInterval === 0 || sheetIndex === allSheetsData.length - 1) {
+                    const progress = (20 + ((sheetIndex / allSheetsData.length) * 80)).toFixed(1);
                     progressFill.style.width = `${progress}%`;
                     progressFill.textContent = `${progress}%`;
-                    progressDetails.textContent = `Mesclando aba ${i + 1} de ${allSheetsData.length} - ${processedData.length} linhas processadas`;
+                    progressDetails.textContent = `Aba ${sheetIndex + 1}/${allSheetsData.length} - ${totalRowsProcessed.toLocaleString()} linhas`;
                     await sleep(1);
                 }
-            }
 
-            progressFill.style.width = '70%';
-            progressFill.textContent = '70%';
-            progressDetails.textContent = `${processedData.length} linhas mescladas`;
-            await sleep(100);
-
-            // Fase 3: Criar array final (70% - 100%)
-            progressText.textContent = 'Fase 3/3: Criando planilha final...';
-            const finalColumns = ['_source_file', '_source_sheet', ...Array.from(allColumns).sort()];
-            const mergedArray = [finalColumns];
-
-            const batchSize = 1000;
-            for (let i = 0; i < processedData.length; i += batchSize) {
-                const batch = processedData.slice(i, i + batchSize);
-
-                batch.forEach(rowObj => {
-                    const row = finalColumns.map(col => {
-                        return rowObj[col] !== undefined ? rowObj[col] : '';
-                    });
-                    mergedArray.push(row);
-                });
-
-                const progress = (70 + ((i / processedData.length) * 30)).toFixed(1);
-                progressFill.style.width = `${progress}%`;
-                progressFill.textContent = `${progress}%`;
-                progressDetails.textContent = `Criando linhas ${i + 1} a ${Math.min(i + batchSize, processedData.length)} de ${processedData.length}`;
-                await sleep(1);
+                // Liberar memória a cada 10 abas processadas
+                if (sheetIndex % 10 === 0 && sheetIndex > 0) {
+                    columnIndexMap.clear();
+                    await sleep(5);
+                }
             }
 
             mergedData = mergedArray;
@@ -645,9 +670,15 @@
             progressFill.style.width = '100%';
             progressFill.textContent = '100%';
             progressText.textContent = 'Mesclagem concluída!';
-            progressDetails.textContent = `${mergedArray.length - 1} linhas, ${finalColumns.length} colunas`;
+            progressDetails.textContent = `${(mergedArray.length - 1).toLocaleString()} linhas, ${finalColumns.length} colunas`;
 
             await sleep(500);
+
+            // Liberar memória dos dados originais (não precisamos mais deles)
+            allSheetsData = [];
+
+            // Forçar garbage collection com uma pausa
+            await sleep(100);
 
             // Exibir preview
             displayPreview(mergedData);
@@ -671,38 +702,51 @@
             const totalColumns = data[0].length;
             const sourceFiles = new Set();
 
-            for (let i = 1; i < data.length; i++) {
+            // Amostrar apenas primeiras 1000 linhas para estatísticas (otimização de memória)
+            const sampleSize = Math.min(data.length, 1001);
+            for (let i = 1; i < sampleSize; i++) {
                 if (data[i][0]) sourceFiles.add(data[i][0]);
             }
 
             stats.innerHTML = `
-                <span class="stats-item">📊 Total de linhas: ${totalRows}</span>
+                <span class="stats-item">📊 Total de linhas: ${totalRows.toLocaleString()}</span>
                 <span class="stats-item">📋 Total de colunas: ${totalColumns}</span>
-                <span class="stats-item">📁 Arquivos mesclados: ${sourceFiles.size}</span>
+                <span class="stats-item">📁 Arquivos mesclados: ${sourceFiles.size}${data.length > 1001 ? '+' : ''}</span>
             `;
 
-            // Criar tabela (máximo 100 linhas no preview)
-            const previewRows = Math.min(data.length, 101); // 1 header + 100 rows
+            // Criar tabela - limitar a 50 linhas para evitar sobrecarga de DOM
+            const maxPreviewRows = 51; // 1 header + 50 rows
+            const previewRows = Math.min(data.length, maxPreviewRows);
             let tableHTML = '<thead><tr>';
 
-            // Cabeçalho
-            data[0].forEach(header => {
-                tableHTML += `<th>${header || ''}</th>`;
-            });
+            // Cabeçalho - limitar a 50 colunas para melhor visualização
+            const maxCols = Math.min(data[0].length, 50);
+            for (let i = 0; i < maxCols; i++) {
+                tableHTML += `<th>${data[0][i] || ''}</th>`;
+            }
+            if (data[0].length > maxCols) {
+                tableHTML += `<th style="background: #9575cd;">... +${data[0].length - maxCols} colunas</th>`;
+            }
             tableHTML += '</tr></thead><tbody>';
 
             // Linhas
             for (let i = 1; i < previewRows; i++) {
                 tableHTML += '<tr>';
-                data[i].forEach(cell => {
-                    tableHTML += `<td>${cell !== undefined && cell !== null ? cell : ''}</td>`;
-                });
+                for (let j = 0; j < maxCols; j++) {
+                    const cell = data[i][j];
+                    // Limitar tamanho do texto da célula para evitar células enormes
+                    const cellText = cell !== undefined && cell !== null ? String(cell).substring(0, 200) : '';
+                    tableHTML += `<td>${cellText}</td>`;
+                }
+                if (data[0].length > maxCols) {
+                    tableHTML += '<td style="color: #999; text-align: center;">...</td>';
+                }
                 tableHTML += '</tr>';
             }
 
-            if (data.length > 101) {
-                tableHTML += `<tr><td colspan="${data[0].length}" style="text-align: center; color: #666; font-style: italic;">
-                    ... e mais ${data.length - 101} linhas (visualize todas no arquivo baixado)
+            if (data.length > maxPreviewRows) {
+                tableHTML += `<tr><td colspan="${Math.min(data[0].length + 1, maxCols + 1)}" style="text-align: center; color: #666; font-style: italic;">
+                    ... e mais ${(data.length - maxPreviewRows).toLocaleString()} linhas (visualize todas no arquivo baixado)
                 </td></tr>`;
             }
 
