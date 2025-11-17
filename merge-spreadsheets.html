@@ -331,11 +331,13 @@
         <div class="warning-box" style="background: #e3f2fd; border-left-color: #2196F3;">
             <h3 style="color: #1565c0;">💡 Processamento Otimizado para Memória:</h3>
             <ul style="margin-left: 20px; color: #1565c0;">
-                <li><strong>Modo Streaming:</strong> Os arquivos são processados um por vez, economizando memória</li>
-                <li><strong>Navegadores recomendados:</strong> Chrome, Edge ou Firefox (mais de 4GB de RAM)</li>
-                <li><strong>Dica:</strong> Feche outras abas do navegador antes de processar volumes grandes</li>
+                <li><strong>Modo Streaming:</strong> Os arquivos são processados um por vez com pausas frequentes</li>
+                <li><strong>Navegadores recomendados:</strong> Chrome, Edge ou Firefox (mínimo 4GB de RAM)</li>
+                <li><strong>Importante:</strong> Não feche a aba durante o processamento - acompanhe a barra de progresso</li>
+                <li><strong>Dica:</strong> Feche outras abas/programas do navegador para liberar memória</li>
                 <li>Sistema otimizado para processar até 100 arquivos com 100 abas cada</li>
-                <li>Após o download, clique em "Limpar Tudo" para liberar memória</li>
+                <li>Processamento em lotes de 100 linhas com pausas para evitar travamento</li>
+                <li>Após o download, clique em "Limpar Tudo" para liberar toda memória utilizada</li>
             </ul>
         </div>
 
@@ -758,23 +760,25 @@
                     return columnIndexMap.has(col) ? columnIndexMap.get(col) : null;
                 });
 
-                // Ler dados da aba linha por linha (streaming dentro da aba)
-                const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1');
-                const batchSize = 200; // Lotes menores
+                // Ler toda a aba de uma vez (mais eficiente que célula por célula)
+                const sheetData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
+
+                // Verificar se há dados para processar
+                if (!sheetData || sheetData.length <= 1) {
+                    // Sem dados ou só cabeçalho, pular esta aba
+                    continue;
+                }
+
+                // Processar linhas em lotes pequenos (pular linha 0 que é cabeçalho)
+                const batchSize = 100; // Processar 100 linhas por vez
                 let rowsInThisSheet = 0;
+                const totalRowsInSheet = sheetData.length - 1; // -1 para excluir cabeçalho
 
-                for (let row = 1; row <= range.e.r; row += batchSize) {
-                    const endRow = Math.min(row + batchSize - 1, range.e.r);
+                for (let i = 1; i < sheetData.length; i += batchSize) {
+                    const endIndex = Math.min(i + batchSize, sheetData.length);
 
-                    for (let r = row; r <= endRow; r++) {
-                        const sourceRow = [];
-
-                        // Ler células da linha
-                        for (let col = range.s.c; col <= range.e.c; col++) {
-                            const cellAddress = XLSX.utils.encode_cell({ r: r, c: col });
-                            const cell = worksheet[cellAddress];
-                            sourceRow.push(cell ? cell.v : '');
-                        }
+                    for (let rowIdx = i; rowIdx < endIndex; rowIdx++) {
+                        const sourceRow = sheetData[rowIdx] || [];
 
                         // Criar linha mesclada
                         const mergedRow = finalColumnIndices.map((colIndex, finalColIdx) => {
@@ -798,22 +802,30 @@
                         totalRowsProcessed++;
                     }
 
-                    // Pausa a cada lote
-                    await sleep(1);
+                    // Pausa a cada lote para não travar o navegador
+                    await sleep(10);
+
+                    // Atualizar progresso
+                    const progressInSheet = (metaIndex + (rowsInThisSheet / (sheetData.length - 1 || 1))) / fileSheetMetadata.length;
+                    const progress = (10 + (progressInSheet * 90)).toFixed(1);
+                    progressFill.style.width = `${progress}%`;
+                    progressFill.textContent = `${progress}%`;
+                    progressDetails.textContent = `Aba ${metaIndex + 1}/${fileSheetMetadata.length} - ${totalRowsProcessed.toLocaleString()} linhas`;
                 }
 
-                // Atualizar progresso
+                // Atualizar progresso final da aba
                 const progress = (10 + ((metaIndex / fileSheetMetadata.length) * 90)).toFixed(1);
                 progressFill.style.width = `${progress}%`;
                 progressFill.textContent = `${progress}%`;
                 progressDetails.textContent = `Aba ${metaIndex + 1}/${fileSheetMetadata.length} - ${totalRowsProcessed.toLocaleString()} linhas`;
 
-                // Limpar mapa
+                // Limpar mapa e dados da aba
                 columnIndexMap.clear();
+                // sheetData não precisa ser limpo manualmente, será coletado pelo GC
 
-                // Pausa maior a cada 5 abas para garbage collection
-                if (metaIndex % 5 === 0) {
-                    await sleep(10);
+                // Pausa maior a cada 3 abas para garbage collection
+                if (metaIndex % 3 === 0) {
+                    await sleep(50);
                 }
             }
 
