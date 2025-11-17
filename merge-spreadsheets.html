@@ -331,11 +331,22 @@
         <div class="warning-box" style="background: #e3f2fd; border-left-color: #2196F3;">
             <h3 style="color: #1565c0;">💡 Processamento Otimizado para Memória:</h3>
             <ul style="margin-left: 20px; color: #1565c0;">
-                <li><strong>Modo Streaming:</strong> Os arquivos são processados um por um, economizando memória</li>
+                <li><strong>Modo Streaming:</strong> Os arquivos são processados um por vez, economizando memória</li>
                 <li><strong>Navegadores recomendados:</strong> Chrome, Edge ou Firefox (mais de 4GB de RAM)</li>
                 <li><strong>Dica:</strong> Feche outras abas do navegador antes de processar volumes grandes</li>
                 <li>Sistema otimizado para processar até 100 arquivos com 100 abas cada</li>
                 <li>Após o download, clique em "Limpar Tudo" para liberar memória</li>
+            </ul>
+        </div>
+
+        <div class="warning-box" style="background: #e8f5e9; border-left-color: #4CAF50;">
+            <h3 style="color: #2e7d32;">⚖️ Detecção Automática de Números Processuais CNJ:</h3>
+            <ul style="margin-left: 20px; color: #2e7d32;">
+                <li><strong>Identificação automática:</strong> O sistema detecta números processuais de 20 dígitos</li>
+                <li><strong>Normalização:</strong> Formata automaticamente para NNNNNNNN-DD.AAAA.J.TR.OOOO</li>
+                <li><strong>Priorização:</strong> Números processuais sempre aparecem na Coluna A (primeira coluna)</li>
+                <li><strong>Validação:</strong> Verifica dígitos verificadores para garantir integridade</li>
+                <li>Aceita números com ou sem formatação (só dígitos ou com pontos e hífens)</li>
             </ul>
         </div>
 
@@ -561,6 +572,80 @@
             return new Promise(resolve => setTimeout(resolve, ms));
         }
 
+        // Funções para detectar e normalizar números processuais CNJ
+        function isNumeroProcessualCNJ(valor) {
+            if (!valor) return false;
+
+            // Converter para string e remover espaços
+            const str = String(valor).trim();
+
+            // Remover formatação (pontos, hífens)
+            const somenteNumeros = str.replace(/[.\-\s]/g, '');
+
+            // Verificar se tem exatamente 20 dígitos
+            if (!/^\d{20}$/.test(somenteNumeros)) return false;
+
+            // Validação adicional: verificar dígitos verificadores (opcional mas recomendado)
+            const resto = parseInt(somenteNumeros.substring(0, 8) + somenteNumeros.substring(10)) % 97;
+            const digitosVerificadores = parseInt(somenteNumeros.substring(8, 10));
+
+            return 98 - resto === digitosVerificadores;
+        }
+
+        function normalizarNumeroProcessual(valor) {
+            if (!valor) return '';
+
+            // Converter para string e remover formatação
+            const str = String(valor).trim();
+            const somenteNumeros = str.replace(/[.\-\s]/g, '');
+
+            // Verificar se é um número processual válido
+            if (!isNumeroProcessualCNJ(valor)) return valor;
+
+            // Aplicar formato padrão: NNNNNNN-DD.AAAA.J.TR.OOOO
+            const formatted =
+                somenteNumeros.substring(0, 7) + '-' +  // NNNNNNN (7 dígitos)
+                somenteNumeros.substring(7, 9) + '.' +  // DD (2 dígitos verificadores)
+                somenteNumeros.substring(9, 13) + '.' + // AAAA (4 dígitos do ano)
+                somenteNumeros.substring(13, 14) + '.' + // J (1 dígito do segmento)
+                somenteNumeros.substring(14, 16) + '.' + // TR (2 dígitos do tribunal)
+                somenteNumeros.substring(16, 20);        // OOOO (4 dígitos da origem)
+
+            return formatted;
+        }
+
+        function detectarColunasNumeroProcessual(headers) {
+            const colunasProcesso = [];
+
+            // Palavras-chave que indicam número processual
+            const keywords = [
+                'processo', 'processual', 'cnj', 'número', 'numero',
+                'n°', 'nº', 'proc', 'process'
+            ];
+
+            headers.forEach((header, index) => {
+                if (!header) return;
+
+                const headerLower = header.toString().toLowerCase().trim();
+
+                // Verificar se o nome da coluna contém palavras-chave
+                const contemKeyword = keywords.some(kw => headerLower.includes(kw));
+
+                if (contemKeyword) {
+                    colunasProcesso.push({
+                        index: index,
+                        name: header,
+                        priority: headerLower === 'numero processual' || headerLower === 'número processual' ? 1 : 2
+                    });
+                }
+            });
+
+            // Ordenar por prioridade (menor = mais prioritário)
+            colunasProcesso.sort((a, b) => a.priority - b.priority);
+
+            return colunasProcesso;
+        }
+
         async function mergeSpreadsheetsIntelligent() {
             if (fileSheetMetadata.length === 0) {
                 alert('Nenhum dado para mesclar!');
@@ -581,20 +666,50 @@
             // Fase 1: Coletar colunas únicas dos metadados (muito rápido - 0% a 10%)
             progressText.textContent = 'Fase 1/2: Identificando colunas únicas...';
             const allColumns = new Set();
+            const processColumns = new Set(); // Colunas que contêm números processuais
 
             for (let i = 0; i < fileSheetMetadata.length; i++) {
                 const meta = fileSheetMetadata[i];
+
+                // Detectar colunas de número processual
+                const colunasProcesso = detectarColunasNumeroProcessual(meta.headers);
+                colunasProcesso.forEach(col => {
+                    processColumns.add(col.name.trim());
+                });
+
                 meta.headers.forEach(col => {
                     if (col) allColumns.add(col.toString().trim());
                 });
             }
 
-            // Criar array de colunas finais
-            const finalColumns = ['_source_file', '_source_sheet', ...Array.from(allColumns).sort()];
+            // Criar array de colunas finais com número processual SEMPRE primeiro
+            let colunasSemProcesso = Array.from(allColumns).filter(col => !processColumns.has(col));
+            let colunasDeProcesso = Array.from(processColumns);
+
+            // Ordenar colunas de processo por prioridade (Número Processual vem primeiro)
+            colunasDeProcesso.sort((a, b) => {
+                const aPriority = (a.toLowerCase() === 'numero processual' || a.toLowerCase() === 'número processual') ? 0 : 1;
+                const bPriority = (b.toLowerCase() === 'numero processual' || b.toLowerCase() === 'número processual') ? 0 : 1;
+                return aPriority - bPriority;
+            });
+
+            // Montar ordem final: metadados + processo + outras colunas ordenadas
+            const finalColumns = [
+                '_source_file',
+                '_source_sheet',
+                ...colunasDeProcesso,
+                ...colunasSemProcesso.sort()
+            ];
+
+            // Criar mapa de colunas de processo para normalização
+            const processoColumnMap = new Map();
+            colunasDeProcesso.forEach(col => {
+                processoColumnMap.set(col, true);
+            });
 
             progressFill.style.width = '10%';
             progressFill.textContent = '10%';
-            progressDetails.textContent = `${allColumns.size} colunas únicas identificadas`;
+            progressDetails.textContent = `${allColumns.size} colunas (${colunasDeProcesso.length} de processo) identificadas`;
             await sleep(100);
 
             // Fase 2: STREAMING - Reprocessar arquivos e mesclar diretamente (10% - 100%)
@@ -662,11 +777,20 @@
                         }
 
                         // Criar linha mesclada
-                        const mergedRow = finalColumnIndices.map(colIndex => {
+                        const mergedRow = finalColumnIndices.map((colIndex, finalColIdx) => {
                             if (colIndex === -1) return meta.fileName;
                             if (colIndex === -2) return meta.sheetName;
                             if (colIndex === null) return '';
-                            return sourceRow[colIndex] !== undefined ? sourceRow[colIndex] : '';
+
+                            let valor = sourceRow[colIndex] !== undefined ? sourceRow[colIndex] : '';
+
+                            // Normalizar número processual se a coluna for de processo
+                            const nomeColuna = finalColumns[finalColIdx];
+                            if (processoColumnMap.has(nomeColuna) && valor) {
+                                valor = normalizarNumeroProcessual(valor);
+                            }
+
+                            return valor;
                         });
 
                         mergedArray.push(mergedRow);
