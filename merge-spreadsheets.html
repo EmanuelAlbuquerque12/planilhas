@@ -329,11 +329,12 @@
         </div>
 
         <div class="warning-box" style="background: #e3f2fd; border-left-color: #2196F3;">
-            <h3 style="color: #1565c0;">💡 Dica para arquivos muito grandes:</h3>
+            <h3 style="color: #1565c0;">💡 Processamento Otimizado para Memória:</h3>
             <ul style="margin-left: 20px; color: #1565c0;">
-                <li>Para volumes muito grandes de dados, use um navegador moderno (Chrome/Edge recomendados)</li>
-                <li>Feche outras abas do navegador para liberar memória</li>
-                <li>O processamento é otimizado para usar o mínimo de memória possível</li>
+                <li><strong>Modo Streaming:</strong> Os arquivos são processados um por um, economizando memória</li>
+                <li><strong>Navegadores recomendados:</strong> Chrome, Edge ou Firefox (mais de 4GB de RAM)</li>
+                <li><strong>Dica:</strong> Feche outras abas do navegador antes de processar volumes grandes</li>
+                <li>Sistema otimizado para processar até 100 arquivos com 100 abas cada</li>
                 <li>Após o download, clique em "Limpar Tudo" para liberar memória</li>
             </ul>
         </div>
@@ -381,7 +382,7 @@
 
     <script>
         let uploadedFiles = [];
-        let allSheetsData = [];
+        let fileSheetMetadata = []; // Apenas metadados, não os dados completos
         let mergedData = null;
 
         // Configurar drag and drop
@@ -442,7 +443,7 @@
             const progressDetails = document.getElementById('progressDetails');
 
             progressContainer.style.display = 'block';
-            allSheetsData = [];
+            fileSheetMetadata = [];
 
             const totalFiles = uploadedFiles.length;
             let totalSheets = 0;
@@ -452,20 +453,21 @@
                 alert(`⚠️ Aviso: Você selecionou ${totalFiles} arquivos. O sistema está otimizado para até 100 arquivos. O processamento pode demorar.`);
             }
 
+            progressText.textContent = 'Analisando estrutura dos arquivos (otimizado para memória)...';
+
+            // PRIMEIRA PASSADA: Coletar apenas metadados (nomes das abas e cabeçalhos)
             for (let fileIndex = 0; fileIndex < uploadedFiles.length; fileIndex++) {
                 const file = uploadedFiles[fileIndex];
                 const progress = ((fileIndex / totalFiles) * 100).toFixed(1);
 
                 progressFill.style.width = `${progress}%`;
                 progressFill.textContent = `${progress}%`;
-                progressText.textContent = `Lendo arquivo ${fileIndex + 1} de ${totalFiles}`;
-                progressDetails.textContent = `Arquivo: ${file.name}`;
+                progressDetails.textContent = `Analisando ${file.name} (${fileIndex + 1}/${totalFiles})`;
 
                 try {
                     const data = await readFileAsync(file);
                     const workbook = XLSX.read(data, { type: 'array' });
 
-                    const fileSheets = [];
                     const sheetCount = workbook.SheetNames.length;
 
                     // Verificar se há muitas abas
@@ -473,32 +475,45 @@
                         console.warn(`Arquivo ${file.name} tem ${sheetCount} abas. Processando todas...`);
                     }
 
-                    // Processar abas com pausas para evitar sobrecarga
+                    // Coletar apenas metadados de cada aba
                     for (let sheetIdx = 0; sheetIdx < workbook.SheetNames.length; sheetIdx++) {
                         const sheetName = workbook.SheetNames[sheetIdx];
                         const worksheet = workbook.Sheets[sheetName];
-                        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
 
-                        if (jsonData.length > 0) {
-                            fileSheets.push({
-                                fileName: file.name,
-                                sheetName: sheetName,
-                                data: jsonData
-                            });
+                        // Pegar apenas a primeira linha (cabeçalhos) - MUITO mais leve na memória
+                        const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1');
+                        const headers = [];
+
+                        // Ler apenas primeira linha
+                        for (let col = range.s.c; col <= range.e.c; col++) {
+                            const cellAddress = XLSX.utils.encode_cell({ r: 0, c: col });
+                            const cell = worksheet[cellAddress];
+                            headers.push(cell ? cell.v : '');
                         }
 
-                        // Pequena pausa a cada 10 abas
-                        if (sheetIdx > 0 && sheetIdx % 10 === 0) {
-                            await sleep(5);
+                        // Verificar se tem dados (mais de uma linha)
+                        const hasData = range.e.r > 0;
+
+                        if (hasData && headers.length > 0) {
+                            fileSheetMetadata.push({
+                                fileIndex: fileIndex,
+                                fileName: file.name,
+                                sheetName: sheetName,
+                                headers: headers
+                            });
+                            totalSheets++;
+                        }
+
+                        // Pequena pausa a cada 20 abas
+                        if (sheetIdx > 0 && sheetIdx % 20 === 0) {
+                            await sleep(1);
                         }
                     }
 
-                    allSheetsData.push(...fileSheets);
-                    totalSheets += fileSheets.length;
-
                     const sheetsInfo = document.getElementById(`sheets-${fileIndex}`);
                     if (sheetsInfo) {
-                        sheetsInfo.textContent = `${fileSheets.length} aba(s) encontrada(s)`;
+                        const sheetsFound = fileSheetMetadata.filter(m => m.fileIndex === fileIndex).length;
+                        sheetsInfo.textContent = `${sheetsFound} aba(s) encontrada(s)`;
                         sheetsInfo.style.color = '#4CAF50';
                     }
 
@@ -512,24 +527,24 @@
                 }
 
                 // Pequena pausa para não travar a interface
-                await sleep(10);
+                await sleep(5);
             }
 
             // Finalizar
             progressFill.style.width = '100%';
             progressFill.textContent = '100%';
-            progressText.textContent = 'Leitura concluída!';
-            progressDetails.textContent = `Total: ${totalFiles} arquivo(s), ${totalSheets} aba(s), ${allSheetsData.length} planilha(s) com dados`;
+            progressText.textContent = 'Análise concluída!';
+            progressDetails.textContent = `Total: ${totalFiles} arquivo(s), ${totalSheets} aba(s) com dados`;
 
             setTimeout(() => {
                 progressContainer.style.display = 'none';
             }, 2000);
 
-            document.getElementById('mergeBtn').disabled = allSheetsData.length === 0;
+            document.getElementById('mergeBtn').disabled = fileSheetMetadata.length === 0;
 
             // Mostrar aviso se houver muitas abas
             if (totalSheets > 500) {
-                alert(`ℹ️ Foram encontradas ${totalSheets} abas. A mesclagem pode demorar alguns segundos.`);
+                alert(`ℹ️ Foram encontradas ${totalSheets} abas. A mesclagem usará processamento em streaming para economizar memória.`);
             }
         }
 
@@ -547,7 +562,7 @@
         }
 
         async function mergeSpreadsheetsIntelligent() {
-            if (allSheetsData.length === 0) {
+            if (fileSheetMetadata.length === 0) {
                 alert('Nenhum dado para mesclar!');
                 return;
             }
@@ -563,51 +578,56 @@
 
             await sleep(50);
 
-            // Fase 1: Coletar colunas únicas (0% - 20%)
-            progressText.textContent = 'Fase 1/2: Coletando colunas únicas...';
+            // Fase 1: Coletar colunas únicas dos metadados (muito rápido - 0% a 10%)
+            progressText.textContent = 'Fase 1/2: Identificando colunas únicas...';
             const allColumns = new Set();
 
-            for (let i = 0; i < allSheetsData.length; i++) {
-                const sheet = allSheetsData[i];
-                const [headers] = sheet.data;
-
-                if (headers && headers.length > 0) {
-                    headers.forEach(col => {
-                        if (col) allColumns.add(col.toString().trim());
-                    });
-                }
-
-                if (i % 10 === 0) {
-                    const progress = ((i / allSheetsData.length) * 20).toFixed(1);
-                    progressFill.style.width = `${progress}%`;
-                    progressFill.textContent = `${progress}%`;
-                    progressDetails.textContent = `Analisando aba ${i + 1} de ${allSheetsData.length}`;
-                    await sleep(1);
-                }
+            for (let i = 0; i < fileSheetMetadata.length; i++) {
+                const meta = fileSheetMetadata[i];
+                meta.headers.forEach(col => {
+                    if (col) allColumns.add(col.toString().trim());
+                });
             }
 
             // Criar array de colunas finais
             const finalColumns = ['_source_file', '_source_sheet', ...Array.from(allColumns).sort()];
 
-            progressFill.style.width = '20%';
-            progressFill.textContent = '20%';
-            progressDetails.textContent = `${allColumns.size} colunas únicas encontradas`;
+            progressFill.style.width = '10%';
+            progressFill.textContent = '10%';
+            progressDetails.textContent = `${allColumns.size} colunas únicas identificadas`;
             await sleep(100);
 
-            // Fase 2: Mesclar dados diretamente para array final (20% - 100%)
-            progressText.textContent = 'Fase 2/2: Mesclando dados das planilhas...';
+            // Fase 2: STREAMING - Reprocessar arquivos e mesclar diretamente (10% - 100%)
+            progressText.textContent = 'Fase 2/2: Mesclando dados (streaming)...';
             const mergedArray = [finalColumns];
 
             let totalRowsProcessed = 0;
-            const updateInterval = Math.max(1, Math.floor(allSheetsData.length / 40)); // Atualizar a cada 2%
+            let lastFileIndex = -1;
+            let currentWorkbook = null;
 
-            for (let sheetIndex = 0; sheetIndex < allSheetsData.length; sheetIndex++) {
-                const sheet = allSheetsData[sheetIndex];
-                const [headers, ...rows] = sheet.data;
+            for (let metaIndex = 0; metaIndex < fileSheetMetadata.length; metaIndex++) {
+                const meta = fileSheetMetadata[metaIndex];
 
-                if (!headers || headers.length === 0) continue;
+                // Carregar arquivo apenas quando mudamos de arquivo (economiza memória)
+                if (meta.fileIndex !== lastFileIndex) {
+                    // Liberar workbook anterior
+                    currentWorkbook = null;
+                    await sleep(10); // Pausa para garbage collection
 
-                // Criar mapa de índices de colunas para otimizar busca
+                    const file = uploadedFiles[meta.fileIndex];
+                    progressDetails.textContent = `Carregando ${file.name}...`;
+
+                    const data = await readFileAsync(file);
+                    currentWorkbook = XLSX.read(data, { type: 'array' });
+
+                    lastFileIndex = meta.fileIndex;
+                }
+
+                // Processar aba
+                const worksheet = currentWorkbook.Sheets[meta.sheetName];
+                const headers = meta.headers;
+
+                // Criar mapa de índices de colunas
                 const columnIndexMap = new Map();
                 headers.forEach((header, index) => {
                     if (header) {
@@ -623,44 +643,53 @@
                     return columnIndexMap.has(col) ? columnIndexMap.get(col) : null;
                 });
 
-                // Processar linhas em lotes menores
-                const batchSize = 500;
-                for (let i = 0; i < rows.length; i += batchSize) {
-                    const batch = rows.slice(i, Math.min(i + batchSize, rows.length));
+                // Ler dados da aba linha por linha (streaming dentro da aba)
+                const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1');
+                const batchSize = 200; // Lotes menores
+                let rowsInThisSheet = 0;
 
-                    batch.forEach(sourceRow => {
-                        // Criar linha mesclada diretamente
-                        const mergedRow = finalColumnIndices.map((colIndex, idx) => {
-                            if (colIndex === -1) return sheet.fileName;
-                            if (colIndex === -2) return sheet.sheetName;
+                for (let row = 1; row <= range.e.r; row += batchSize) {
+                    const endRow = Math.min(row + batchSize - 1, range.e.r);
+
+                    for (let r = row; r <= endRow; r++) {
+                        const sourceRow = [];
+
+                        // Ler células da linha
+                        for (let col = range.s.c; col <= range.e.c; col++) {
+                            const cellAddress = XLSX.utils.encode_cell({ r: r, c: col });
+                            const cell = worksheet[cellAddress];
+                            sourceRow.push(cell ? cell.v : '');
+                        }
+
+                        // Criar linha mesclada
+                        const mergedRow = finalColumnIndices.map(colIndex => {
+                            if (colIndex === -1) return meta.fileName;
+                            if (colIndex === -2) return meta.sheetName;
                             if (colIndex === null) return '';
                             return sourceRow[colIndex] !== undefined ? sourceRow[colIndex] : '';
                         });
 
                         mergedArray.push(mergedRow);
-                    });
-
-                    totalRowsProcessed += batch.length;
-
-                    // Pequena pausa para garbage collection
-                    if (i % (batchSize * 4) === 0) {
-                        await sleep(1);
+                        rowsInThisSheet++;
+                        totalRowsProcessed++;
                     }
-                }
 
-                // Atualizar progresso
-                if (sheetIndex % updateInterval === 0 || sheetIndex === allSheetsData.length - 1) {
-                    const progress = (20 + ((sheetIndex / allSheetsData.length) * 80)).toFixed(1);
-                    progressFill.style.width = `${progress}%`;
-                    progressFill.textContent = `${progress}%`;
-                    progressDetails.textContent = `Aba ${sheetIndex + 1}/${allSheetsData.length} - ${totalRowsProcessed.toLocaleString()} linhas`;
+                    // Pausa a cada lote
                     await sleep(1);
                 }
 
-                // Liberar memória a cada 10 abas processadas
-                if (sheetIndex % 10 === 0 && sheetIndex > 0) {
-                    columnIndexMap.clear();
-                    await sleep(5);
+                // Atualizar progresso
+                const progress = (10 + ((metaIndex / fileSheetMetadata.length) * 90)).toFixed(1);
+                progressFill.style.width = `${progress}%`;
+                progressFill.textContent = `${progress}%`;
+                progressDetails.textContent = `Aba ${metaIndex + 1}/${fileSheetMetadata.length} - ${totalRowsProcessed.toLocaleString()} linhas`;
+
+                // Limpar mapa
+                columnIndexMap.clear();
+
+                // Pausa maior a cada 5 abas para garbage collection
+                if (metaIndex % 5 === 0) {
+                    await sleep(10);
                 }
             }
 
@@ -674,8 +703,8 @@
 
             await sleep(500);
 
-            // Liberar memória dos dados originais (não precisamos mais deles)
-            allSheetsData = [];
+            // Liberar metadados (não precisamos mais)
+            fileSheetMetadata = [];
 
             // Forçar garbage collection com uma pausa
             await sleep(100);
@@ -778,7 +807,7 @@
 
         function clearAll() {
             uploadedFiles = [];
-            allSheetsData = [];
+            fileSheetMetadata = [];
             mergedData = null;
 
             document.getElementById('fileInput').value = '';
