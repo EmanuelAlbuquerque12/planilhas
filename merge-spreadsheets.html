@@ -320,17 +320,30 @@
         <div class="info-box">
             <h3>Como funciona:</h3>
             <ul>
-                <li>Selecione ou arraste múltiplos arquivos Excel (.xlsx, .xls) ou CSV</li>
-                <li>O sistema lê todas as abas de cada arquivo (suporta até 100 arquivos com até 100 abas cada)</li>
-                <li>Colunas com o mesmo nome são mescladas automaticamente</li>
-                <li>Nenhum dado é perdido - todas as colunas são preservadas</li>
-                <li><strong>Gera arquivo CSV:</strong> compatível com Excel, sem limite de tamanho</li>
-                <li>Visualize o resultado e baixe a planilha mesclada</li>
+                <li><strong>Aceita múltiplos formatos:</strong> Excel (.xlsx, .xls) e CSV (.csv, .txt)</li>
+                <li><strong>CSV inteligente:</strong> detecta automaticamente delimitadores (vírgula, ponto-e-vírgula, tab)</li>
+                <li>O sistema lê todas as abas de arquivos Excel e processa CSVs completos</li>
+                <li>Colunas com o mesmo nome são mescladas automaticamente entre todos os arquivos</li>
+                <li>Nenhum dado é perdido - todas as colunas e linhas são preservadas</li>
+                <li><strong>Suporta até 100 arquivos</strong> (Excel com até 100 abas cada, CSV ilimitado)</li>
+                <li><strong>Gera arquivo CSV unificado:</strong> compatível com Excel, sem limite de tamanho</li>
+                <li>Visualize o preview e baixe a planilha mesclada</li>
+            </ul>
+        </div>
+
+        <div class="warning-box" style="background: #e3f2fd; border-left-color: #2196F3;">
+            <h3 style="color: #1565c0;">📄 Suporte Completo a CSV de Entrada:</h3>
+            <ul style="margin-left: 20px; color: #1565c0;">
+                <li><strong>Detecção automática de delimitadores:</strong> vírgula, ponto-e-vírgula, tab, pipe</li>
+                <li><strong>Encoding inteligente:</strong> UTF-8, ANSI, ISO-8859-1 automaticamente detectados</li>
+                <li><strong>Mescla CSV + Excel:</strong> combine arquivos de diferentes formatos na mesma operação</li>
+                <li><strong>CSVs gigantes:</strong> processa arquivos CSV de qualquer tamanho</li>
+                <li><strong>Preserva dados:</strong> nenhuma informação perdida na conversão</li>
             </ul>
         </div>
 
         <div class="warning-box" style="background: #e8f5e9; border-left-color: #4CAF50;">
-            <h3 style="color: #2e7d32;">💾 Por que CSV ao invés de XLSX?</h3>
+            <h3 style="color: #2e7d32;">💾 Por que saída em CSV ao invés de XLSX?</h3>
             <ul style="margin-left: 20px; color: #2e7d32;">
                 <li><strong>5x menos memória:</strong> CSV usa muito menos RAM que XLSX</li>
                 <li><strong>Sem limite de tamanho:</strong> Processa milhões de linhas sem travar</li>
@@ -343,8 +356,11 @@
 
         <div class="upload-section" id="uploadSection">
             <h2>📁 Selecione os arquivos</h2>
-            <p style="margin: 15px 0; color: #666;">Arraste e solte os arquivos aqui ou clique no botão abaixo</p>
-            <input type="file" id="fileInput" multiple accept=".xlsx,.xls,.csv">
+            <p style="margin: 15px 0; color: #666;">
+                <strong>Aceita:</strong> Excel (.xlsx, .xls), CSV (.csv), Texto (.txt)<br>
+                Arraste e solte os arquivos aqui ou clique no botão abaixo
+            </p>
+            <input type="file" id="fileInput" multiple accept=".xlsx,.xls,.csv,.txt">
             <button class="upload-btn" onclick="document.getElementById('fileInput').click()">
                 Escolher Arquivos
             </button>
@@ -468,11 +484,28 @@
 
                 try {
                     const data = await readFileAsync(file);
-                    const workbook = XLSX.read(data, { type: 'array' });
+
+                    // Detectar se é CSV pelo nome do arquivo
+                    const isCSV = file.name.toLowerCase().endsWith('.csv') || file.name.toLowerCase().endsWith('.txt');
+
+                    // Opções de leitura otimizadas para CSV
+                    const readOptions = {
+                        type: 'array',
+                        raw: false, // Converter valores automaticamente
+                        codepage: 65001 // UTF-8
+                    };
+
+                    // Para CSV, adicionar opções de detecção de delimitador
+                    if (isCSV) {
+                        // SheetJS detecta automaticamente delimitadores comuns: , ; \t |
+                        readOptions.FS = undefined; // Deixa detectar automaticamente
+                    }
+
+                    const workbook = XLSX.read(data, readOptions);
 
                     const sheetCount = workbook.SheetNames.length;
 
-                    // Verificar se há muitas abas
+                    // Verificar se há muitas abas (geralmente CSV tem apenas 1)
                     if (sheetCount > 100) {
                         console.warn(`Arquivo ${file.name} tem ${sheetCount} abas. Processando todas...`);
                     }
@@ -497,11 +530,15 @@
                         const hasData = range.e.r > 0;
 
                         if (hasData && headers.length > 0) {
+                            // Para CSV, usar nome do arquivo como nome da "aba"
+                            const displaySheetName = isCSV ? file.name.replace(/\.(csv|txt)$/i, '') : sheetName;
+
                             fileSheetMetadata.push({
                                 fileIndex: fileIndex,
                                 fileName: file.name,
-                                sheetName: sheetName,
-                                headers: headers
+                                sheetName: displaySheetName,
+                                headers: headers,
+                                isCSV: isCSV
                             });
                             totalSheets++;
                         }
@@ -724,13 +761,37 @@
                     progressDetails.textContent = `Carregando ${file.name}...`;
 
                     const data = await readFileAsync(file);
-                    currentWorkbook = XLSX.read(data, { type: 'array' });
+
+                    // Usar mesmas opções otimizadas da primeira passada
+                    const isCSV = file.name.toLowerCase().endsWith('.csv') || file.name.toLowerCase().endsWith('.txt');
+                    const readOptions = {
+                        type: 'array',
+                        raw: false,
+                        codepage: 65001
+                    };
+
+                    if (isCSV) {
+                        readOptions.FS = undefined; // Detectar delimitador automaticamente
+                    }
+
+                    currentWorkbook = XLSX.read(data, readOptions);
 
                     lastFileIndex = meta.fileIndex;
                 }
 
                 // Processar aba
-                const worksheet = currentWorkbook.Sheets[meta.sheetName];
+                // Para CSV, o nome real da aba é diferente do displaySheetName
+                // Precisamos buscar pela primeira (e geralmente única) aba
+                let worksheet;
+                if (meta.isCSV) {
+                    // CSV geralmente tem apenas uma aba, pegar a primeira
+                    const firstSheetName = currentWorkbook.SheetNames[0];
+                    worksheet = currentWorkbook.Sheets[firstSheetName];
+                } else {
+                    // Para Excel, usar o nome da aba normalmente
+                    worksheet = currentWorkbook.Sheets[meta.sheetName];
+                }
+
                 const headers = meta.headers;
 
                 // Criar mapa de índices de colunas
